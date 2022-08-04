@@ -1,0 +1,10 @@
+ecrire les fonctions de test unitaires (pytest)
+importer une bibliothèque de logging (sentry.io)
+xpath trop gourmand en ressource, préférer les attribut de class (bs4)
+creer un point d'entrée avec un argument avec:
+ - tiret "l" pour un livre
+ - tiret "c" pour une categorie
+ - tiret "url" pour un site
+ - Ajouter une limite
+ - tiret "help" pour l'aide
+ - tiret "output" pour le dossier de sortie
