@@ -3,15 +3,30 @@ import logging
 from pydoc import doc
 import logging_loki
 import requests
-import pandas
+import pandas as pd
 from bs4 import BeautifulSoup
 from lxml import html
 import regex
 import os
 
+# Extract, Transfrom, Load
+# bien séparer les phases ETL, faire des fonctions differentes
+
+
 #region definition de constante
 APP_NAME = 'OpenClassRoom projet_2' #Nom de l'application pour les logs
 DEFAULT_URL = 'http://books.toscrape.com/' #url par défaut sinon précisé par l'utilisateur
+DICT_STARS = {
+                'One':1,
+                'Two':2,
+                'Three':3,
+                'Four':4,
+                'Five':5,
+            }
+#endregion
+
+#region variable
+list_categorie={} #ne pas scrapper en avance car on ne connait pas le nombre de catégorie à scrapper (peut faire planter le serveur), soit scrapper en amont et stocker en dur soit scrapper à la volée
 #endregion
 
 #region initialisation du logger
@@ -46,18 +61,18 @@ parser = argparse.ArgumentParser(usage='use "%(prog)s --help" for more informati
 
 parser.add_argument("-s", "--src",
                     metavar='\b', 
-                    help=f"Choisissez le site à scrapper (par defaut : {DEFAULT_URL} ", 
+                    help=f"Choisissez le site à scrapper (par defaut : {DEFAULT_URL} ",
                     default=DEFAULT_URL)
 
 parser.add_argument("-o", "--outputdir",
                     metavar='\b', 
-                    help="Choisissez en repertoire de sortie (par default : \"/data\")", 
-                    default="/data")
+                    help="Choisissez en repertoire de sortie (par default : \"data\")",
+                    default="data")
 
 parser.add_argument("-c", "--category",
                     metavar='\b', 
-                    help="Choisissez en repertoire de sortie (par default : \"/data\")", 
-                    default="/data")
+                    help="Choisissez en repertoire de sortie (par default : \"None\")",
+                    default=None)
 
 args = parser.parse_args()
 #endregion
@@ -71,7 +86,6 @@ def convert_price(price):
     Returns:
         float: valeur en numérique (float) de la valeur d'entrée
     """
-    
     currency_unit = regex.findall(r'\p{Sc}', price)[0]
     return float(price.replace(currency_unit,''))
 
@@ -85,51 +99,145 @@ def get_number_in_string(s):
         int: le premier entier de la chaine d'entrée
     """
     return [int(s) for s in s.replace('(','').split() if s.isdigit()][0]
+
+
+def find_specific_td_in_table(table,text_search,delta=1):
+    """Renvoie la valeur de la cellule d'un tableau sur la meme ligne : 
+        si le texte recherché est un td : avec une décalage de colonne de "delta"
+        si le texte recherché est un th : on renvoie le premier td de la ligne
+
+    Args:
+        table (string): tableau dans lequel rechercher sous forme de soup de tr / td 
+        text_search (string): texte titre du champs rechercher
+        delta (int, optional): décalage de colonne. Defaults to 1.
+
+    Returns:
+        string: valeur du champ rechercher si aucun champ trouver renvoi None
+    """
+    for tr in table.findAll('tr'):
+        if tr.find('th'):
+            if tr.find('th').text==text_search:
+                return  tr.find('td').text.strip()
+        else:
+            i=0
+            for td in tr.findAll('td'):
+                if td.text == text_search:
+                    return  tr.findAll('td')[i+delta].text.strip()
+                i+=1
+    
+    return None
+
+def get_stars_rating(soup):
+    """Renvoi le nombre d'étoile d'un livre
+
+    Args:
+        soup (bs4.class.array): Liste des classes de la soupe d'entrée sous forme de tuple(array)
+
+    Returns:
+        int: nombre d'étoile
+    """
+    return DICT_STARS[soup[0][1]]
 #endregion
 
 class Book():
+    #implementer les fonctions de nettoyage dans la classe livre
     def __init__(self,product_page_url,universal_product_code,title,price_including_tax,price_excluding_tax,number_available,product_description,category,review_rating,image_url):
-        self.item={
-            "product_page_url":product_page_url,
-            "universal_product_code":universal_product_code,
-            "title":title,
-            "price_including_tax":price_including_tax,
-            "price_excluding_tax":price_excluding_tax,
-            "number_available":number_available,
-            "product_description":product_description,
-            "category":category,
-            "review_rating":review_rating,
-            "image_url":image_url,
+        self.product_page_url=product_page_url,
+        self.universal_product_code=universal_product_code,
+        self.title=title,
+        self.price_including_tax=price_including_tax,
+        self.price_excluding_tax=price_excluding_tax,
+        self.number_available=number_available,
+        self.product_description=product_description,
+        self.category=category,
+        self.review_rating=review_rating,
+        self.image_url=image_url
+        
+    def to_dict(self):  
+        return{
+            "product_page_url":self.product_page_url,
+            "universal_product_code":self.universal_product_code,
+            "title":self.title,
+            "price_including_tax":self.price_including_tax,
+            "price_excluding_tax":self.price_excluding_tax,
+            "number_available":self.number_available,
+            "product_description":self.product_description,
+            "category":self.category,
+            "review_rating":self.review_rating,
+            "image_url":self.image_url,
         }
+
+    def to_pandas(self):
+        return pd.DataFrame({
+            "product_page_url":[self.product_page_url],
+            "universal_product_code":[self.universal_product_code],
+            "title":[self.title],
+            "price_including_tax":[self.price_including_tax],
+            "price_excluding_tax":[self.price_excluding_tax],
+            "number_available":[self.number_available],
+            "product_description":[self.product_description],
+            "category":[self.category],
+            "review_rating":[self.review_rating],
+            "image_url":[self.image_url],
+                })
+
+
+def get_category(url,category):
+    """Renvoie l'url de la catégorie fournie en entrée
+
+    Args:
+        url (string): url du site
+        category (string): catégorie recherchée
+
+    Returns:
+        string: url de la catégoerie
+    """
+    reponse = requests.get(url)
+    soup = BeautifulSoup(reponse.text,features="lxml")
+    soup = soup.find('div',{'class':'side_categories'})
+    for li in soup.find_all('a'):
+        if li.text.strip()==category:
+            return url+li['href']
+    return None
 
 
 #region fonctions et classeter spécifiques au projet
 def get_url_page(num_page):
     return f'http://books.toscrape.com/catalogue/page-{num_page}.html'
 
-
-
 def get_book_from_url(url):
     reponse = requests.get(url)
-    # soup = BeautifulSoup(reponse.text)
-    tree = html.fromstring(reponse.content)    
+    soup = BeautifulSoup(reponse.text,features="lxml")
+    table = soup.find('table',{'class':'table table-striped'})
+
     product_page_url = url
-    universal_product_code = tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/table/tr[1]')[0].text_content().strip()
-    title = tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/div[1]/div[2]/h1')[0].text_content()
-    price_including_tax = convert_price(tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/table/tr[4]/td')[0].text_content())
-    price_excluding_tax = convert_price(tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/table/tr[3]/td')[0].text_content())
-    number_available = get_number_in_string(tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/table/tr[6]/td')[0].text_content())
-    product_description = tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/p')[0].text_content()
-    category = tree.xpath('/html/body/div[1]/div/ul/li[3]/a')[0].text_content()
-    review_rating = tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/div[1]/div[2]/p[3]')[0].text_content()
-    image_url = tree.xpath('/html/body/div[1]/div/div[2]/div[2]/article/div[1]/div[1]/div/div/div/div/img/@src')[0]
+    universal_product_code = find_specific_td_in_table(table,'UPC')
+    title = soup.find('div',{'class':'product_main'}).find('h1').text.strip()
+    price_including_tax = find_specific_td_in_table(table,'Price (incl. tax)')
+    price_excluding_tax = find_specific_td_in_table(table,'Price (excl. tax)')
+    number_available = find_specific_td_in_table(table,'Availability')
+    product_description = soup.find('article',{'class':'product_page'}).text.strip()
+    category = find_specific_td_in_table(table,'UPC')
+    review_rating = soup.find('p',{'class':'star-rating'})['class']
+    image_url = soup.find('div',{'class':'carousel-inner'}).find('img')['src'] 
     return Book(product_page_url,universal_product_code,title,price_including_tax,price_excluding_tax,number_available,product_description,category,review_rating,image_url)
 
 
 
 #region point d'entrée
 if __name__ == "__main__":
-    print(args.verbose)
+    url_to_srap = args.src
+    category = args.category
     absolute_path = os.path.dirname(__file__)
+    output_dir = absolute_path+'/'+args.outputdir
+    print(__file__)
     print(absolute_path)
+    print(output_dir)
+    os.mkdir(output_dir)
+
+    for k,v in list_categorie.items():
+        print(k,v)
+    book = get_book_from_url('http://books.toscrape.com/catalogue/scott-pilgrims-precious-little-life-scott-pilgrim-1_987/index.html')
+    # print(book.to_dict())
+    print(get_category(url_to_srap,'Christian'))
 #endregion
