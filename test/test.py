@@ -9,9 +9,6 @@ from lxml import html
 import regex
 import os
 
-# Extract, Transfrom, Load
-# bien séparer les phases ETL, faire des fonctions differentes
-
 
 #region definition de constante
 APP_NAME = 'OpenClassRoom projet_2' #Nom de l'application pour les logs
@@ -25,25 +22,17 @@ DICT_STARS = {
             }
 #endregion
 
-#region variable
-list_categorie={} #ne pas scrapper en avance car on ne connait pas le nombre de catégorie à scrapper (peut faire planter le serveur), soit scrapper en amont et stocker en dur soit scrapper à la volée
-#endregion
-
 #region initialisation du logger
 logging_loki.emitter.LokiEmitter.level_tag = "level"
 handler = logging_loki.LokiHandler(
-    url="http://molp.fr:3100/loki/api/v1/push", 
+    url="http://20.0.0.200:3100/loki/api/v1/push",
+    tags={"application": APP_NAME},
     version="1",
 )
 
 logger = logging.getLogger("my-logger")
 logger.addHandler(handler)
-
-logger.info(
-    "Démarrage de l'application", 
-    extra={"tags": {"app": APP_NAME}},
-)
-
+logger.setLevel(logging.DEBUG)
 #endregion
 
 
@@ -71,7 +60,7 @@ parser.add_argument("-o", "--outputdir",
 
 parser.add_argument("-c", "--category",
                     metavar='\b', 
-                    help="Choisissez en repertoire de sortie (par default : \"None\")",
+                    help="Choisissez la catégorie de livre à scrapper (par default : Toutes (\"None\"))",
                     default=None)
 
 args = parser.parse_args()
@@ -86,9 +75,13 @@ def convert_price(price):
     Returns:
         float: valeur en numérique (float) de la valeur d'entrée
     """
-    currency_unit = regex.findall(r'\p{Sc}', price)[0]
-    return float(price.replace(currency_unit,''))
-
+    try:
+        currency_unit = regex.findall(r'\p{Sc}', price)[0]
+        return float(price.replace(currency_unit,''))
+    except Exception as e:
+        logger.error("Erreur de fonction", extra={"tags": {"function":'convert_price', "Paramètre":price}})
+        return None
+    
 def get_number_in_string(s):
     """Renvoie le premier entier isolé trouvé dans une chaine de caractères,l'entier peut être précédé de "(" sans espace, toutes les parenthèse ouvrante sont ignorées
 
@@ -98,8 +91,12 @@ def get_number_in_string(s):
     Returns:
         int: le premier entier de la chaine d'entrée
     """
-    return [int(s) for s in s.replace('(','').split() if s.isdigit()][0]
-
+    try:
+        value = [int(s) for s in s.replace('(','').split() if s.isdigit()][0]
+    except Exception as e:
+        logger.error("Erreur de fonction", extra={"tags": {"function":'get_number_in_string',"Paramètre":s}})
+        raise Exception
+    
 
 def find_specific_td_in_table(table,text_search,delta=1):
     """Renvoie la valeur de la cellule d'un tableau sur la meme ligne : 
@@ -116,7 +113,7 @@ def find_specific_td_in_table(table,text_search,delta=1):
     """
     for tr in table.findAll('tr'):
         if tr.find('th'):
-            if tr.find('th').text==text_search:
+            if tr.find('th').text == text_search:
                 return  tr.find('td').text.strip()
         else:
             i=0
@@ -140,7 +137,6 @@ def get_stars_rating(soup):
 #endregion
 
 class Book():
-    #implementer les fonctions de nettoyage dans la classe livre
     def __init__(self,product_page_url,universal_product_code,title,price_including_tax,price_excluding_tax,number_available,product_description,category,review_rating,image_url):
         self.product_page_url=product_page_url,
         self.universal_product_code=universal_product_code,
@@ -152,6 +148,15 @@ class Book():
         self.category=category,
         self.review_rating=review_rating,
         self.image_url=image_url
+        #ensuite on nettoie les valeurs
+        self.transform_clean_book()
+        
+    def transform_clean_book(self):
+        self.price_including_tax=convert_price(self.price_including_tax),
+        self.price_excluding_tax=convert_price(self.price_excluding_tax),
+        self.number_available=get_number_in_string(self.number_available),
+        self.product_description=self.product_description.strip(),
+        self.review_rating=get_stars_rating(self.review_rating),
         
     def to_dict(self):  
         return{
@@ -201,9 +206,12 @@ def get_category(url,category):
     return None
 
 
-#region fonctions et classeter spécifiques au projet
+#region extract et classeter spécifiques au projet
 def get_url_page(num_page):
     return f'http://books.toscrape.com/catalogue/page-{num_page}.html'
+
+def get_url_category_page(url_base,num_page):
+    return url.replace('index.html',f'page-{num_page}.html')
 
 def get_book_from_url(url):
     reponse = requests.get(url)
@@ -222,22 +230,91 @@ def get_book_from_url(url):
     image_url = soup.find('div',{'class':'carousel-inner'}).find('img')['src'] 
     return Book(product_page_url,universal_product_code,title,price_including_tax,price_excluding_tax,number_available,product_description,category,review_rating,image_url)
 
+def get_list_books_url(url_base):
+    reponse = requests.get(url_base)
+    soup = BeautifulSoup(reponse.text,features="lxml")
+    list_url_soup = soup.find('ol',{'class':'row'}).findAll('a')
+    list_url = []
+    for l in list_url_soup:
+        list_url.append(l['href'])
+    
+    list_url_final = []
+    for url in list_url:
+        url_modif = url
+        url_base_modif = url_base
+        while url_modif[:3]=='../':
+            url_modif = url_modif[3:]
+            url_base_modif = '/'.join(url_base_modif.split('/')[:-1])
+        list_url_final.append(url_base_modif+'/'+url_modif)
+    
+    return list_url_final
+#endregion
+
+
+#region load
+def creation_repertoire_sortie(rep):
+    try:
+        os.mkdir(rep)
+    except Exception as e:
+        logger.error("Erreur de fonction", extra={"tags": {"function":'creation_repartoire_sortie', "Paramètre":rep, "Erreur":e}})       
+
+
+def save_list_book(list_book,rep):
+    try:
+        books = pd.concat([b.to_pandas() for b in list_book])
+        books.reset_index(drop=Tue,inplace=True)
+        books.to_csv(rep+'/books.csv')
+        logger.info(f"Liste de livre enregistrer") 
+    except Exception as e:
+        logger.error("Erreur de fonction", extra={"tags": {"function":'save_list_book', "Paramètre":rep, "Erreur":e}})     
+#endregion
+
+
+
+
 
 
 #region point d'entrée
 if __name__ == "__main__":
-    url_to_srap = args.src
-    category = args.category
-    absolute_path = os.path.dirname(__file__)
-    output_dir = absolute_path+'/'+args.outputdir
-    print(__file__)
-    print(absolute_path)
-    print(output_dir)
-    os.mkdir(output_dir)
+    logger.info("Démarrage de l'application")
 
-    for k,v in list_categorie.items():
-        print(k,v)
-    book = get_book_from_url('http://books.toscrape.com/catalogue/scott-pilgrims-precious-little-life-scott-pilgrim-1_987/index.html')
+
+    url_to_scrap = args.src
+    category = args.category
+    output_dir = args.outputdir
+    logger.info(f"Lecteur parametre url : {url_to_scrap}")       
+    logger.info(f"Lecteur parametre category : {category}")  
+    logger.info(f"Lecteur parametre output : {output_dir}") 
+    
+    
+    #test si la catégorie fait plus d'une page
+    url = get_category(url_to_scrap,category)
+    if category:
+        url = get_category(url_to_scrap,category)
+        reponse = requests.get(get_url_category_page(url,1))
+        if reponse.status_code==200:
+            None
+         
+    
+    
+    #lecture des livres
+    page_to_scrap = 1
+    reponse = requests.get(get_url_category(url,page_to_scrap))
+    # while reponse.status_code == 200:
+        
+
+
+    
+    
+    # creation_repartoire_sortie(output_dir)
+    # absolute_path = os.path.dirname(__file__)
+
+
+    # book = get_book_from_url('http://books.toscrape.com/catalogue/scott-pilgrims-precious-little-life-scott-pilgrim-1_987/index.html')
     # print(book.to_dict())
-    print(get_category(url_to_srap,'Christian'))
+    print(get_category(url_to_scrap,'Christian'))
+    
+    liste = get_list_books_url(get_category(url_to_scrap,'Christian'))
+    for l in liste:
+        print(l)
 #endregion
