@@ -287,7 +287,8 @@ class Book():
         self.product_description=self.product_description
         self.review_rating=get_stars_rating(self.review_rating)
         self.image_url = urljoin(self.product_page_url,self.image_url)
-
+        self.category=self.category.strip().lower().replace(' ','-')
+        self.product_description=self.product_description.strip().replace(';',',')
     def to_dict(self):
         """ renvoi le livre sous forme de dictionnaire
 
@@ -400,8 +401,8 @@ def get_book_from_url(url):
         price_excluding_tax = find_specific_td_in_table(table,'Price (excl. tax)')[1:]
         number_available = find_specific_td_in_table(table,'Availability')
         product_description = soup.find('article',{'class':'product_page'})\
-                              .findAll('p')[3].text.strip()
-        category = find_specific_td_in_table(table,'UPC')
+                              .findAll('p')[3].text
+        category = soup.find('ul',{'class':'breadcrumb'}).findAll('li')[-2].text
         review_rating = soup.find('p',{'class':'star-rating'})['class']
         image_url = soup.find('div',{'class':'carousel-inner'}).find('img')['src']
         return Book(product_page_url,
@@ -465,7 +466,9 @@ def save_list_book(list_book,output_dir):
     try:
         books = pd.concat([b.to_pandas()for b in list_book])
         books.reset_index(drop=True,inplace=True)
-        books.to_csv(output_dir+'/books/books.csv',sep=';',index=False)
+        list_category = books.category.unique()
+        for cat in list_category:
+            books[books.category==cat].to_csv(f'{output_dir}/books/{cat}.csv',sep=';',index=False)
         log_info(f"Liste de livre enregistré")
     except Exception as _e:
         log_error('',output_dir,_e)
@@ -502,8 +505,11 @@ if __name__ == "__main__":
     log_info(f"App Start")       
 
     url_to_scrap = args.src
-    category = args.category.lower()
+    category = args.category
     output_dir = args.outputdir
+
+    if category is not None:
+        category = category.lower()
 
     if args.verbose:
         is_verbose=True
@@ -520,7 +526,7 @@ if __name__ == "__main__":
     liste_book=[] #variable contentant toutes livres (class Book)
     url = get_category(url_to_scrap,category)
     try:
-        if category:
+        if category is not None:
             log_info(f"Catégorie: {category} - Scrapping des url de chaque livre")
 
             url_cat = get_category(url_to_scrap,category) #on récupère l'url de la catégorie
@@ -569,6 +575,7 @@ if __name__ == "__main__":
 
     except Exception as _e:
         log_error('',url,_e)
+        
     liste_url_book = list(set(liste_url_book))
     log_info(f"{len(liste_url_book)} livres trouvés")
     log_info(f"Scrapping des informations des livres en cours")
@@ -590,7 +597,7 @@ if __name__ == "__main__":
         print('###########')
         print(f'Le programme à recontré {nb_error} erreur(s), consultez les logs')
     else:
-        print('Tout c\'est bien déroulé, le programme n\'a pas rencontrer d\'erreur')
+        print('Tout c\'est bien déroulé, le programme n\'a pas rencontré d\'erreur')
     print('###########')
     print('Fin du programme')
     print('###########')

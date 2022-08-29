@@ -47,11 +47,14 @@ project
 │   README.md
 │   .gitignore   
 │   requirement.txt
+|   log.log
 │
 └───data
 │   │
 │   └───books
-│   |   │   books.csv  
+│   |   │   cat_1.csv
+│   |   │   cat_2.csv
+│   |   │   ...  
 │   |   
 |   └───image
 │       │   qjgdjqd.jpg
@@ -60,5 +63,5 @@ project
 │   
 └───src
     │   scrap_book.py
-    │   log.log
+
 ```
