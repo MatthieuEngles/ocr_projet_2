@@ -165,7 +165,7 @@ parser = argparse.ArgumentParser(usage='use "%(prog)s --help" for more informati
 
 parser.add_argument("-s", "--src",
                     metavar='\b', 
-                    help=f"Choisissez le site à scrapper (par defaut : {DEFAULT_URL} ",
+                    help=f"Choisissez le site à scrapper (par defaut : {DEFAULT_URL})",
                     default=DEFAULT_URL)
 
 parser.add_argument("-o", "--outputdir",
